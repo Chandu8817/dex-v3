@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ethers } from 'ethers';
 import { JsonRpcSigner } from 'ethers';
 import ERC20_ABI from '../abis/ERC20.json';
+import WETH_ABI from '../abis/WETH.json';
 
 export const useERC20 = (signer: JsonRpcSigner | null) => {
   const [loading, setLoading] = useState<boolean>(false);
@@ -173,6 +174,28 @@ export const useERC20 = (signer: JsonRpcSigner | null) => {
     }
   };
 
+  const warpNativeToWETH = async (amount: bigint, wethAddress: string) => {
+    if (signer) {
+      const contractInstance = new ethers.Contract(wethAddress, WETH_ABI, signer);
+
+      try {
+        setLoading(true);
+        setError(null);
+
+        const tx = await contractInstance.deposit({ value: amount });
+        await tx.wait();
+        return tx.hash;
+      } catch (err: any) {
+        console.error('Error wrapping ETH to WETH:', err);
+        setError(err.message || 'Failed to wrap ETH to WETH');
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+
   return {
     getBalance,
     approve,
@@ -181,6 +204,7 @@ export const useERC20 = (signer: JsonRpcSigner | null) => {
     getSymbol,
     getName,
     checkOrApproveAll,
+    warpNativeToWETH,
     loading,
     error,
     isInitialized: !!signer,

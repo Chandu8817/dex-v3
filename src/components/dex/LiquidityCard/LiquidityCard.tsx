@@ -1,10 +1,12 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAccount, useChainId } from "wagmi";
 import { ethers, JsonRpcSigner } from "ethers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus } from "lucide-react";
+import { Plus, ArrowRightLeft } from "lucide-react";
+import { motion } from "framer-motion";
 import { FEE_TIERS, uniswapContracts } from "@/lib/web3/config";
 import { usePositionManager } from "@/hooks/usePositionManager";
+import { COMMON_TOKENS, getNativeToken } from "@/lib/web3/tokens";
 import { toast } from "sonner";
 
 import { LiquidityCardProps, LiquidityState, PriceRangeSuggestion } from "./types";
@@ -55,6 +57,9 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   const [allowanceB, setAllowanceB] = useState("0");
   const [poolAddress, setPoolAddress] = useState("");
 
+  // Refs for debouncing and cleanup
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Custom hooks
   const { notification, showNotification } = useLiquidityNotification();
   const { isProcessing, setIsProcessing } = useLiquidityProcessing();
@@ -88,7 +93,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
 
   // Check if hooks are ready
   const isQuoteInitialized = true; // You may need to add this hook check
-  const { fetchPool, getAmountOut, fetchPriceAndPoolData } = usePriceData({
+  const { fetchPool, getAmountOut, fetchAmountOut, fetchPriceAndPoolData } = usePriceData({
     signer,
     token0: state.token0,
     token1: state.token1,
@@ -118,12 +123,32 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     fetch();
   }, [state.token0, state.token1, fetchBalancesAndAllowances]);
 
-  // Fetch amount out when amount0 changes
+  // Fetch amount out when amount0 changes (with debouncing and caching)
   useEffect(() => {
-    getAmountOut(state.amount0, (amount) => {
-      setState((s) => ({ ...s, amount1: amount }));
-    });
-  }, [state.amount0, getAmountOut]);
+    // Clear previous timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    if (!state.amount0) {
+      setState((s) => ({ ...s, amount1: "" }));
+      return;
+    }
+
+    // Debounce the fetch call
+    debounceTimerRef.current = setTimeout(() => {
+      fetchAmountOut(state.amount0, (amount) => {
+        setState((s) => ({ ...s, amount1: amount }));
+      });
+    }, 300); // 300ms debounce
+
+    // Cleanup on unmount or when amount0 changes again
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [state.amount0, fetchAmountOut]);
 
   // Fetch price data
   useEffect(() => {
@@ -149,13 +174,50 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   }, [state.token0?.address, state.token1?.address, state.feeTier]);
 
   // Handler functions
+  const normalizeToken = useCallback((token) => {
+    if (token.symbol === "ETH") {
+      const wethToken = COMMON_TOKENS[chainId]?.find((t) => t.symbol === "WETH");
+      return wethToken || token;
+    }
+    return token;
+  }, [chainId]);
+
   const handleTokenSelect = (token) => {
+    const normalizedToken = normalizeToken(token);
+    
     if (tokenSelectorOpen === "token0") {
-      setState((s) => ({ ...s, token0: token, amount0: "", amount1: "" }));
+      // Check if trying to select the same token
+      if (normalizedToken.address === state.token1?.address) {
+        toast.error("Cannot select the same token for both sides");
+        setTokenSelectorOpen(null);
+        return;
+      }
+      setState((s) => ({ ...s, token0: normalizedToken, amount0: "", amount1: "" }));
     } else {
-      setState((s) => ({ ...s, token1: token, amount0: "", amount1: "" }));
+      // Check if trying to select the same token
+      if (normalizedToken.address === state.token0?.address) {
+        toast.error("Cannot select the same token for both sides");
+        setTokenSelectorOpen(null);
+        return;
+      }
+      setState((s) => ({ ...s, token1: normalizedToken, amount0: "", amount1: "" }));
     }
     setTokenSelectorOpen(null);
+  };
+
+  // Swap token positions
+  const handleSwapTokens = () => {
+    setState((s) => ({
+      ...s,
+      token0: s.token1,
+      token1: s.token0,
+      amount0: s.amount1,
+      amount1: s.amount0,
+      minPrice: "",
+      maxPrice: "",
+    }));
+    setTickLower("");
+    setTickUpper("");
   };
 
   const handleApproveA = async () => {
@@ -293,12 +355,12 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
         tickUpper: Number(tu),
         amount0Desired,
         amount1Desired,
-        amount0Min :0n ,
-        amount1Min :0n ,
+        amount0Min: amount0Min,
+        amount1Min: amount1Min,
         recipient: address,
         deadline: Math.floor(Date.now() / 1000) + 30 * 60,
       };
-debugger    
+
       const value =
         state.token0.symbol === "ETH"
           ? amount0Desired
@@ -368,14 +430,29 @@ debugger
         </CardHeader>
 
         <CardContent className="space-y-6">
-          <TokenPairSelector
-            token0={state.token0}
-            token1={state.token1}
-            tokenSelectorOpen={tokenSelectorOpen}
-            onTokenSelectorOpen={setTokenSelectorOpen}
-            onTokenSelect={handleTokenSelect}
-            chainId={chainId}
-          />
+          <div className="relative">
+            <TokenPairSelector
+              token0={state.token0}
+              token1={state.token1}
+              tokenSelectorOpen={tokenSelectorOpen}
+              onTokenSelectorOpen={setTokenSelectorOpen}
+              onTokenSelect={handleTokenSelect}
+              chainId={chainId}
+            />
+            <button
+              onClick={handleSwapTokens}
+              disabled={!state.token0 || !state.token1}
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-muted border border-border rounded-lg p-2 hover:bg-secondary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Swap tokens"
+            >
+              <motion.div
+                whileHover={{ rotate: 180 }}
+                transition={{ duration: 0.3 }}
+              >
+                <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
+              </motion.div>
+            </button>
+          </div>
 
           <FeeTierSelector
             feeTier={state.feeTier}

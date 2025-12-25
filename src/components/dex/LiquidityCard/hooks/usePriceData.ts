@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { JsonRpcSigner, ethers } from "ethers";
 import { Token } from "@/lib/web3/tokens";
 import { useFactory } from "@/hooks/useFactory";
@@ -8,6 +8,10 @@ import { PriceRangeSuggestion, PoolData } from "../types";
 import { snapTick } from "../utils/formatting";
 import { toast } from "sonner";
 
+interface QuoteCache {
+  amountOut: string;
+  timestamp: number;
+}
 
 interface UsePriceDataProps {
   signer: JsonRpcSigner | null;
@@ -18,6 +22,8 @@ interface UsePriceDataProps {
   isInitialized: boolean;
   isQuoteInitialized: boolean;
 }
+
+const QUOTE_CACHE_DURATION = 30000; // 30 seconds
 
 export const usePriceData = ({
   signer,
@@ -31,6 +37,10 @@ export const usePriceData = ({
   const { getPoolAddress } = useFactory(signer);
   const { quoteExactInputSingle } = useQuote(signer);
   const { getCurrentPrice, getSlot0, getTickSpacing } = usePool(signer);
+  
+  // Cache for quotes
+  const quoteCacheRef = useRef<Map<string, QuoteCache>>(new Map());
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchPool = useCallback(
     async (tokenA: Token, tokenB: Token, fee: number): Promise<string | null> => {
@@ -49,6 +59,26 @@ export const usePriceData = ({
   );
 
   const getAmountOut = useCallback(
+    (
+      amount0: string,
+      setAmount1: (value: string) => void
+    ): (() => void) => {
+      // Clear previous timer
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      // Return cleanup function
+      return () => {
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+        }
+      };
+    },
+    []
+  );
+
+  const fetchAmountOut = useCallback(
     async (
       amount0: string,
       setAmount1: (value: string) => void
@@ -72,7 +102,16 @@ export const usePriceData = ({
           return;
         }
 
-    
+        // Generate cache key
+        const cacheKey = `${token0.address}-${token1.address}-${feeTier}-${amount0}`;
+        const cachedQuote = quoteCacheRef.current.get(cacheKey);
+        
+        // Check if cache is valid (not expired)
+        if (cachedQuote && Date.now() - cachedQuote.timestamp < QUOTE_CACHE_DURATION) {
+          setAmount1(cachedQuote.amountOut);
+          return;
+        }
+
         const quote = await quoteExactInputSingle(
           token0.address,
           token1.address,
@@ -92,7 +131,15 @@ export const usePriceData = ({
           decimalsOut
         );
 
-        setAmount1(minAmountOut.toString());
+        const result = minAmountOut.toString();
+        
+        // Cache the result with timestamp
+        quoteCacheRef.current.set(cacheKey, {
+          amountOut: result,
+          timestamp: Date.now(),
+        });
+
+        setAmount1(result);
       } catch (err) {
         console.error("Failed to get quote:", err);
       }
@@ -180,6 +227,7 @@ export const usePriceData = ({
   return {
     fetchPool,
     getAmountOut,
+    fetchAmountOut,
     fetchPriceAndPoolData,
   };
 };
