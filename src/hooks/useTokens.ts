@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Token } from '../types';
+
 import { useQuery } from '@apollo/client/react';
 import { gql } from '@apollo/client';
 
-import { COMMON_TOKENS } from '@/lib/web3/tokens';
+import { COMMON_TOKENS, Token } from '@/lib/web3/tokens';
 import { useChainId } from 'wagmi';
 
 // Common tokens that will be available in the app
@@ -30,34 +30,30 @@ export function useTokens() {
   // Always build tokensWithLogo from latest tokenData
   useEffect(() => {
     if (tokenData) {
+      
       const tokens = (tokenData?.tokens || []).map((token: Token) => {
         const logo = common_tokens.find(
           (logo) => logo.symbol.toLowerCase() === token.symbol.toLowerCase(),
         );
         return {
           ...token,
+          address: token?.id || token.address, // Map GraphQL 'id' to 'address'
           logoURI:
             logo?.logoURI ||
             'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
         };
       });
-      const eth = {
-        id: '0x8e91D1043A2bcC8b68cd25e73847Cb392e3a604D',
-        symbol: 'ETH',
-        decimals: 18,
-        name: 'Ethereum',
-        logoURI:
-          'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
-      };
-      tokens.push(eth);
+      
+
       setTokens(tokens);
     }
-  }, [tokenData]);
+  }, [tokenData, common_tokens]);
 
   // Find token by address
   const getTokenByAddress = useCallback(
     (address: string): Token | undefined => {
-      return tokens?.find((token) => token?.id.toLowerCase() === address.toLowerCase());
+      if (!address) return undefined;
+      return tokens?.find((token) => token.address !== undefined && token.address.toLowerCase() === address.toLowerCase());
     },
     [tokens],
   );

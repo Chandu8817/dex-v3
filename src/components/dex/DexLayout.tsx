@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ethers } from 'ethers';
 import { useWalletClient } from 'wagmi';
+import { Pools } from './PoolsList';
 
 type Tab = 'swap' | 'liquidity' | 'positions' | 'pools' | 'history';
 
@@ -141,13 +142,10 @@ export function DexLayout() {
             {activeTab === 'swap' && <SwapCard signer={signer} />}
             {activeTab === 'liquidity' && <LiquidityCard signer={signer} />}
             {activeTab === 'positions' && <PositionsPanel />}
-            {activeTab === 'pools' && (
-              <div className="text-center py-20 text-muted-foreground">
-                <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <h2 className="text-xl font-semibold mb-2">Pool Analytics</h2>
-                <p>Coming soon - TVL, volume, APR, and historical charts</p>
-              </div>
-            )}
+            {activeTab === 'pools' &&<Pools signer={signer} />
+}
+
+            
             {activeTab === 'history' && (
               <div className="text-center py-20 text-muted-foreground">
                 <History className="h-12 w-12 mx-auto mb-4 opacity-50" />

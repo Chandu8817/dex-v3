@@ -140,3 +140,4 @@ export const subgraphEndpoints = {
   [polygon.id]: 'https://api.thegraph.com/subgraphs/name/ianlapham/uniswap-v3-polygon',
   [sepolia.id]: 'https://api.studio.thegraph.com/query/118492/dex-v-3/version/latest',
 } as const;
+
