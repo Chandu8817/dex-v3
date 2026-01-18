@@ -1,74 +1,68 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { TrendingUp, TrendingDown, Plus, Minus, DollarSign, Percent, ExternalLink } from 'lucide-react';
+import { TrendingUp, TrendingDown, Plus, Minus, DollarSign, Percent, ExternalLink, AlertCircle, Loader } from 'lucide-react';
 import { useChainId } from 'wagmi';
+import { useAccount } from 'wagmi';
+import { useQuery } from '@apollo/client/react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { TokenIcon } from '@/components/dex/TokenSelector';
-import { COMMON_TOKENS, getNativeToken, Token } from '@/lib/web3/tokens';
 import { chainMetadata } from '@/lib/web3/config';
+import { useCollectFees, useDecreaseLiquidity } from '@/hooks/usePositions';
+import { POOLS_QUERY, USER_POSITIONS_QUERY } from '@/graphql/queries';
 import { cn } from '@/lib/utils';
-
-interface Position {
-  id: string;
-  token0: Token;
-  token1: Token;
-  feeTier: number;
-  liquidity: string;
-  tickLower: number;
-  tickUpper: number;
-  inRange: boolean;
-  uncollectedFees0: string;
-  uncollectedFees1: string;
-  currentPrice: number;
-  minPrice: number;
-  maxPrice: number;
-}
-
-// Mock positions data
-const mockPositions: Position[] = [
-  {
-    id: '12345',
-    token0: { address: '0x', symbol: 'ETH', name: 'Ethereum', decimals: 18, chainId: 1 },
-    token1: { address: '0x', symbol: 'USDC', name: 'USD Coin', decimals: 6, chainId: 1 },
-    feeTier: 3000,
-    liquidity: '1500.00',
-    tickLower: -887220,
-    tickUpper: 887220,
-    inRange: true,
-    uncollectedFees0: '0.0234',
-    uncollectedFees1: '43.21',
-    currentPrice: 1850,
-    minPrice: 1500,
-    maxPrice: 2200,
-  },
-  {
-    id: '12346',
-    token0: { address: '0x', symbol: 'WBTC', name: 'Wrapped Bitcoin', decimals: 8, chainId: 1 },
-    token1: { address: '0x', symbol: 'ETH', name: 'Ethereum', decimals: 18, chainId: 1 },
-    feeTier: 500,
-    liquidity: '2500.00',
-    tickLower: -887220,
-    tickUpper: 887220,
-    inRange: false,
-    uncollectedFees0: '0.00012',
-    uncollectedFees1: '0.0156',
-    currentPrice: 16.5,
-    minPrice: 14,
-    maxPrice: 15.5,
-  },
-];
+import { toast } from 'sonner';
 
 export function PositionsPanel() {
   const chainId = useChainId();
+  const { address } = useAccount();
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
   const meta = chainMetadata[chainId as keyof typeof chainMetadata];
 
-  const totalValue = mockPositions.reduce((acc, p) => acc + parseFloat(p.liquidity), 0);
-  const totalFees = mockPositions.reduce((acc, p) => {
-    return acc + parseFloat(p.uncollectedFees0) * 1850 + parseFloat(p.uncollectedFees1);
+  // Fetch positions from subgraph (using Mint events)
+  const { data, loading: isLoading, error, refetch } = useQuery<any>(POOLS_QUERY, {
+    variables: {
+      owner: address?.toLowerCase() || '',
+    },
+    skip: !address,
+    pollInterval: 10000, // Refresh every 10 seconds
+  });
+
+  const mints = data?.mints || [];
+
+  const totalValue = mints.reduce((acc: number, mint: any) => {
+    const amount0 = parseFloat(mint.amount0) || 0;
+    const amount1 = parseFloat(mint.amount1) || 0;
+    return acc + amount0 + amount1;
   }, 0);
+
+  const totalFees = mints.reduce((acc: number, mint: any) => {
+    const amountUSD = parseFloat(mint.amountUSD) || 0;
+    // Note: Mints don't track fees directly, using deposited amount as proxy
+    return acc + (amountUSD * 0.01); // Rough estimate
+  }, 0);
+
+  if (error) {
+    return (
+      <Card variant="glass">
+        <CardContent className="p-6">
+          <div className="flex items-center gap-3 text-red-500">
+            <AlertCircle className="h-5 w-5" />
+            <span>{error.message}</span>
+          </div>
+          <Button 
+            variant="secondary" 
+            size="sm" 
+            onClick={() => refetch()} 
+            className="mt-4"
+          >
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -110,7 +104,7 @@ export function PositionsPanel() {
               </div>
               <div>
                 <div className="text-sm text-muted-foreground">Active Positions</div>
-                <div className="text-2xl font-bold">{mockPositions.length}</div>
+                <div className="text-2xl font-bold">{mints.length}</div>
               </div>
             </div>
           </CardContent>
@@ -127,18 +121,23 @@ export function PositionsPanel() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
-          {mockPositions.length === 0 ? (
+          {isLoading ? (
+            <div className="text-center py-12">
+              <Loader className="h-5 w-5 animate-spin mx-auto mb-2" />
+              <div className="text-muted-foreground">Loading positions...</div>
+            </div>
+          ) : mints.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <div className="text-lg mb-2">No positions yet</div>
               <div className="text-sm">Add liquidity to start earning fees</div>
             </div>
           ) : (
-            mockPositions.map((position) => (
+            mints.map((mint: any) => (
               <PositionCard
-                key={position.id}
-                position={position}
-                isSelected={selectedPosition === position.id}
-                onSelect={() => setSelectedPosition(position.id === selectedPosition ? null : position.id)}
+                key={mint.id}
+                position={mint}
+                isSelected={selectedPosition === mint.id}
+                onSelect={() => setSelectedPosition(mint.id === selectedPosition ? null : mint.id)}
                 explorerUrl={meta?.explorerUrl}
               />
             ))
@@ -150,14 +149,44 @@ export function PositionsPanel() {
 }
 
 interface PositionCardProps {
-  position: Position;
+  position: any;
   isSelected: boolean;
   onSelect: () => void;
   explorerUrl?: string;
 }
 
 function PositionCard({ position, isSelected, onSelect, explorerUrl }: PositionCardProps) {
-  const rangeWidth = ((position.currentPrice - position.minPrice) / (position.maxPrice - position.minPrice)) * 100;
+  const chainId = useChainId();
+  const { collectFees, isLoading: isCollecting } = useCollectFees(undefined, chainId);
+  const { decreaseLiquidity, isLoading: isDecreasing } = useDecreaseLiquidity(undefined, chainId);
+
+  // Extract data from Mint event
+  const mint = position;
+  const pool = mint.pool || {};
+  const token0 = pool.token0 || {};
+  const token1 = pool.token1 || {};
+  const feeTier = pool.feeTier || 0;
+  const liquidity = parseFloat(mint.liquidity) || 0;
+  const amount0 = parseFloat(mint.amount0) || 0;
+  const amount1 = parseFloat(mint.amount1) || 0;
+  const amountUSD = parseFloat(mint.amountUSD) || 0;
+
+  const handleCollectFees = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Mint events from subgraph don't include tokenId
+    // This would require querying the blockchain for NFT positions
+    toast.info("Fee collection requires on-chain position data");
+  };
+
+  const handleRemoveLiquidity = async (e: React.MouseEvent, percent: number) => {
+    e.stopPropagation();
+    // Mint events from subgraph don't include tokenId
+    // This would require querying the blockchain for NFT positions
+    toast.info("Liquidity management requires on-chain position data");
+  };
+
+  // Simplified visualization (without on-chain price data)
+  const positionValue = amount0 + amount1;
 
   return (
     <motion.div
@@ -174,33 +203,29 @@ function PositionCard({ position, isSelected, onSelect, explorerUrl }: PositionC
       <div className="p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="flex -space-x-2">
-            <TokenIcon token={position.token0} />
-            <TokenIcon token={position.token1} />
+            {token0.id && <div className="w-6 h-6 rounded-full bg-primary/30" />}
+            {token1.id && <div className="w-6 h-6 rounded-full bg-secondary/30" />}
           </div>
           <div>
             <div className="font-semibold">
-              {position.token0.symbol}/{position.token1.symbol}
+              {token0.symbol || 'Token0'}/{token1.symbol || 'Token1'}
             </div>
             <div className="text-sm text-muted-foreground">
-              {(position.feeTier / 10000).toFixed(2)}% fee
+              {(feeTier / 10000).toFixed(2)}% fee
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
           <Badge 
-            variant={position.inRange ? "default" : "secondary"}
-            className={cn(
-              position.inRange 
-                ? "bg-in-range/20 text-in-range border-in-range/30" 
-                : "bg-out-of-range/20 text-out-of-range border-out-of-range/30"
-            )}
+            variant="default"
+            className="bg-blue-500/20 text-blue-500 border-blue-500/30"
           >
-            {position.inRange ? 'In Range' : 'Out of Range'}
+            Active
           </Badge>
           <div className="text-right">
-            <div className="font-semibold">${position.liquidity}</div>
-            <div className="text-sm text-muted-foreground">Liquidity</div>
+            <div className="font-semibold">${positionValue.toFixed(2)}</div>
+            <div className="text-sm text-muted-foreground">Value</div>
           </div>
         </div>
       </div>
@@ -214,72 +239,57 @@ function PositionCard({ position, isSelected, onSelect, explorerUrl }: PositionC
           className="border-t border-border"
         >
           <div className="p-4 space-y-4">
-            {/* Price Range Visualization */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Price Range</span>
-                <span>
-                  {position.minPrice.toLocaleString()} - {position.maxPrice.toLocaleString()} {position.token1.symbol}
-                </span>
+            {/* Position Info */}
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-muted-foreground">Amount0</div>
+                <div className="font-semibold">{amount0.toFixed(6)} {token0.symbol}</div>
               </div>
-              <div className="relative h-3 bg-muted rounded-full overflow-hidden">
-                <div
-                  className={cn(
-                    "absolute h-full rounded-full",
-                    position.inRange ? "bg-in-range" : "bg-out-of-range"
-                  )}
-                  style={{ 
-                    left: '10%', 
-                    right: '10%',
-                    width: '80%'
-                  }}
-                />
-                <div
-                  className="absolute top-0 bottom-0 w-1 bg-foreground rounded-full"
-                  style={{ left: `${Math.min(Math.max(rangeWidth, 0), 100)}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{position.minPrice.toLocaleString()}</span>
-                <span>Current: {position.currentPrice.toLocaleString()}</span>
-                <span>{position.maxPrice.toLocaleString()}</span>
+              <div>
+                <div className="text-muted-foreground">Amount1</div>
+                <div className="font-semibold">{amount1.toFixed(6)} {token1.symbol}</div>
               </div>
             </div>
 
-            {/* Uncollected Fees */}
+            {/* Tick Info */}
             <div className="bg-background/50 rounded-xl p-3">
-              <div className="text-sm text-muted-foreground mb-2">Uncollected Fees</div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <TokenIcon token={position.token0} size="sm" />
-                    <span className="font-medium">{position.uncollectedFees0}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <TokenIcon token={position.token1} size="sm" />
-                    <span className="font-medium">{position.uncollectedFees1}</span>
-                  </div>
-                </div>
-                <Button variant="success" size="sm">
-                  Collect
-                </Button>
+              <div className="text-sm text-muted-foreground mb-2">Position Range</div>
+              <div className="flex justify-between text-sm">
+                <span>Lower Tick: {position.tickLower}</span>
+                <span>Upper Tick: {position.tickUpper}</span>
+              </div>
+              <div className="text-sm text-muted-foreground mt-2">
+                Liquidity: {liquidity.toLocaleString()}
+              </div>
+            </div>
+
+            {/* Fees Info */}
+            <div className="bg-background/50 rounded-xl p-3">
+              <div className="text-sm text-muted-foreground mb-2">Transaction Info</div>
+              <div className="text-sm text-muted-foreground">
+                <div>Timestamp: {new Date(parseInt(mint.timestamp) * 1000).toLocaleString()}</div>
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex gap-2">
-              <Button variant="glass" className="flex-1 gap-2">
+              <Button variant="glass" className="flex-1 gap-2" disabled={isDecreasing}>
                 <Plus className="h-4 w-4" />
                 Increase
               </Button>
-              <Button variant="glass" className="flex-1 gap-2">
-                <Minus className="h-4 w-4" />
+              <Button 
+                variant="glass" 
+                className="flex-1 gap-2" 
+                onClick={(e) => handleRemoveLiquidity(e, 50)}
+                disabled={isDecreasing}
+              >
+                {isDecreasing ? <Loader className="h-4 w-4 animate-spin" /> : <Minus className="h-4 w-4" />}
                 Remove
               </Button>
               {explorerUrl && (
                 <Button variant="ghost" size="icon" asChild>
                   <a 
-                    href={`${explorerUrl}/token/${position.id}`}
+                    href={`${explorerUrl}/tx/${mint.transaction?.id}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}

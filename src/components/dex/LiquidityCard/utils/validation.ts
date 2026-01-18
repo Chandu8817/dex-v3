@@ -25,13 +25,20 @@ export const hasSufficientBalance = (
 ): boolean => {
   if (!amount0 || !amount1 || !token0 || !token1) return false;
   try {
+    // Parse amounts with proper decimals
     const amount0Wei = ethers.parseUnits(amount0, token0.decimals);
     const amount1Wei = ethers.parseUnits(amount1, token1.decimals);
+    
+    // Parse balances with proper decimals (balance is returned as decimal string)
+    const balance0Wei = ethers.parseUnits(balance0 || "0", token0.decimals);
+    const balance1Wei = ethers.parseUnits(balance1 || "0", token1.decimals);
+    
     return (
-      BigInt(balance0) >= BigInt(amount0Wei) &&
-      BigInt(balance1) >= BigInt(amount1Wei)
+      BigInt(balance0Wei) >= BigInt(amount0Wei) &&
+      BigInt(balance1Wei) >= BigInt(amount1Wei)
     );
   } catch (e) {
+    console.error("Balance check error:", e);
     return false;
   }
 };

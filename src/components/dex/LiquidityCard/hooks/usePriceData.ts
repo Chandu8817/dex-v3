@@ -47,6 +47,7 @@ export const usePriceData = ({
       if (!signer || !isInitialized) return null;
       if (!tokenA || !tokenB) return null;
       try {
+        
         const address = await getPoolAddress(tokenA, tokenB, fee);
         return address;
       } catch (error) {

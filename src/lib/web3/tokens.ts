@@ -199,6 +199,14 @@ export function getNativeToken(chainId: number): Token {
       };
   }
 }
+export function getWrappedNativeToken(chainId: number,symbol: string): Token | null {
+  const tokens = COMMON_TOKENS[chainId];
+  if (!tokens) return null;
+  if (symbol === 'ETH' || symbol === 'MATIC') {
+    return tokens.find(token => token.symbol === (chainId === polygon.id ? 'WETH' : 'WETH')) || null;
+  }
+  
+}
 
 // Format token amount with decimals
 export function formatTokenAmount(amount: bigint, decimals: number, precision = 6): string {

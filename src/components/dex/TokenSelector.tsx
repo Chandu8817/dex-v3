@@ -26,22 +26,42 @@ export function TokenSelector({
 }: TokenSelectorProps) {
   const [search, setSearch] = useState('');
 
+
   const tokens = useMemo(() => {
     const nativeToken = getNativeToken(chainId);
     const chainTokens = COMMON_TOKENS[chainId] || [];
     return [nativeToken, ...chainTokens];
   }, [chainId]);
 
+  // If search is an address and not in tokens, add it as a custom token
   const filteredTokens = useMemo(() => {
     if (!search) return tokens;
     const searchLower = search.toLowerCase();
-    return tokens.filter(
+    let filtered = tokens.filter(
       (token) =>
         token.symbol.toLowerCase().includes(searchLower) ||
         token.name.toLowerCase().includes(searchLower) ||
         token.address.toLowerCase().includes(searchLower)
     );
+
+    // If search looks like an address and not found, add as custom token
+    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(search.trim());
+    const alreadyExists = tokens.some(t => t.address.toLowerCase() === searchLower);
+    if (isAddress && !alreadyExists) {
+      filtered = [
+        {
+          address: search.trim(),
+          symbol: search.trim().slice(0, 6) + '...',
+          name: 'Custom Token',
+          decimals: 18,
+          logoURI: '',
+        },
+        ...filtered
+      ];
+    }
+    return filtered;
   }, [tokens, search]);
+
 
   const handleSelect = (token: Token) => {
     onSelect(token);

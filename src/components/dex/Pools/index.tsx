@@ -9,7 +9,12 @@ import { usePool } from "../../../hooks/usePool";
 import { usePositionManager } from "../../../hooks/usePositionManager";
 import { useERC20 } from "../../../hooks/useERC20";
 import { useTokens } from "../../../hooks/useTokens";
-import { Token, COMMON_TOKENS } from "../../../lib/web3/tokens";
+import {
+  Token,
+  COMMON_TOKENS,
+  NATIVE_TOKEN_ADDRESS,
+  getWrappedNativeToken,
+} from "../../../lib/web3/tokens";
 import { TokenSelector } from "../TokenSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,8 +36,6 @@ interface Pool {
   volumeUSD: string;
   txCount?: string;
   createdAtTimestamp?: string;
-    
-
 }
 
 const POSITION_MANAGER_ADDRESS = "0xC36442b4a4522E871399CD717aBDD847Ab11fe88";
@@ -51,7 +54,9 @@ export function Pools({ signer }: PoolProps) {
   const [error, setError] = useState<Error | null>(null);
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const [selectedPosition, setSelectedPosition] = useState<Pool | null>(null);
-  const [tokenSelectorOpenFor, setTokenSelectorOpenFor] = useState<"token0" | "token1" | null>(null);
+  const [tokenSelectorOpenFor, setTokenSelectorOpenFor] = useState<
+    "token0" | "token1" | null
+  >(null);
   const chainId = useChainId();
 
   const { data, loading: isLoadingPools } = useQuery<any>(POOLS_QUERY, {
@@ -66,8 +71,10 @@ export function Pools({ signer }: PoolProps) {
 
   const { getTokenByAddress } = useTokens();
   const { getPoolAddress, createPool } = useFactory(signer);
-  const { getUserPositions, mint } = usePositionManager(signer);
-  const { initializePool, isPoolInitialized, getSlot0, getTickSpacing } = usePool(signer);
+  const { getUserPositions, mint, createAndInitializePoolIfNecessary } =
+    usePositionManager(signer);
+  const { initializePool, isPoolInitialized, getSlot0, getTickSpacing, computeUniswapV3PoolAddress } =
+    usePool(signer);
   const { checkOrApproveAll, getSymbol } = useERC20(signer);
 
   // Map pools with logos
@@ -76,10 +83,12 @@ export function Pools({ signer }: PoolProps) {
 
     const mappedPools = (data.pools || []).map((pool: any) => {
       const token0Logo = tokenLogos.find(
-        (logo) => logo.symbol.toLowerCase() === pool.token0.symbol.toLowerCase()
+        (logo) =>
+          logo.symbol.toLowerCase() === pool.token0.symbol.toLowerCase(),
       );
       const token1Logo = tokenLogos.find(
-        (logo) => logo.symbol.toLowerCase() === pool.token1.symbol.toLowerCase()
+        (logo) =>
+          logo.symbol.toLowerCase() === pool.token1.symbol.toLowerCase(),
       );
 
       return {
@@ -116,7 +125,12 @@ export function Pools({ signer }: PoolProps) {
         const detailedPositions = positions
           .map((pos: any) => {
             // Validate that token addresses exist and are valid
-            if (!pos.token0 || !pos.token1 || typeof pos.token0 !== 'string' || typeof pos.token1 !== 'string') {
+            if (
+              !pos.token0 ||
+              !pos.token1 ||
+              typeof pos.token0 !== "string" ||
+              typeof pos.token1 !== "string"
+            ) {
               return null;
             }
 
@@ -156,26 +170,53 @@ export function Pools({ signer }: PoolProps) {
     try {
       setIsLoading(true);
 
-      const token0: Token = tokenA!;
-      const token1: Token = tokenB!;
+      // Use wrapped token if native
+      let _tokenA = tokenA;
+      let _tokenB = tokenB;
+      // NATIVE_TOKEN_ADDRESS and wrapped token logic assumed available in scope
+      if (tokenA.address === NATIVE_TOKEN_ADDRESS) {
+        _tokenA = getWrappedNativeToken(chainId, tokenA.symbol)!;
+      }
+      if (tokenB.address === NATIVE_TOKEN_ADDRESS) {
+        _tokenB = getWrappedNativeToken(chainId, tokenB.symbol)!;
+      }
+
+      const token0: Token = _tokenA!;
+      const token1: Token = _tokenB!;
 
       const sortedTokens = [token0, token1].sort((a, b) =>
-        a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1
+        a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1,
       ) as [Token, Token];
 
       const [sortedToken0, sortedToken1] = sortedTokens;
       let amount0, amount1;
 
       if (sortedToken0.address.toLowerCase() === tokenA.address.toLowerCase()) {
-        amount0 = ethers.parseUnits(reserve0.toString(), Number(sortedToken0.decimals));
-        amount1 = ethers.parseUnits(reserve1.toString(), Number(sortedToken1.decimals));
+        amount0 = ethers.parseUnits(
+          reserve0.toString(),
+          Number(sortedToken0.decimals),
+        );
+        amount1 = ethers.parseUnits(
+          reserve1.toString(),
+          Number(sortedToken1.decimals),
+        );
       } else {
-        amount0 = ethers.parseUnits(reserve1.toString(), Number(sortedToken0.decimals));
-        amount1 = ethers.parseUnits(reserve0.toString(), Number(sortedToken1.decimals));
+        amount0 = ethers.parseUnits(
+          reserve1.toString(),
+          Number(sortedToken0.decimals),
+        );
+        amount1 = ethers.parseUnits(
+          reserve0.toString(),
+          Number(sortedToken1.decimals),
+        );
       }
 
       // Check if pool already exists
-      let poolAddress = await getPoolAddress(sortedToken0, sortedToken1, feeTier);
+      let poolAddress = await getPoolAddress(
+        sortedToken0,
+        sortedToken1,
+        feeTier,
+      );
       const poolExists = poolAddress !== ethers.ZeroAddress;
 
       if (poolExists) {
@@ -194,16 +235,28 @@ export function Pools({ signer }: PoolProps) {
         token1: sortedToken1,
         feeTier,
       });
+ const newPoolAddress = computeUniswapV3PoolAddress(
+        
+          sortedToken0.address,
+          sortedToken1.address,
+          feeTier,
+          chainId)
+      debugger
+      const { txHash,  } =
+        await createAndInitializePoolIfNecessary(
+          signer,
+          sortedToken0,
+          sortedToken1,
+          feeTier,
+          BigInt(amount0),
+          BigInt(amount1),
+          chainId,
+        );
 
-      const { txHash, newPoolAddress } = await createPool(sortedToken0, sortedToken1, feeTier);
+      console.log("Pool creation tx hash:", txHash);
 
+   
       console.log("New pool address:", newPoolAddress);
-
-      if (txHash && newPoolAddress) {
-        await initializePool(newPoolAddress, BigInt(amount0), BigInt(amount1));
-      } else {
-        throw new Error("Failed to create pool");
-      }
 
       console.log("Pool created at:", newPoolAddress);
 
@@ -217,13 +270,16 @@ export function Pools({ signer }: PoolProps) {
         amount1,
         POSITION_MANAGER_ADDRESS,
         symbolA,
-        symbolB
+        symbolB,
       );
 
       const slot0 = await getSlot0(newPoolAddress);
       const currentTick = slot0.tick;
       const tickSpacing = await getTickSpacing(newPoolAddress);
-      const range = Math.max(1, Math.round(Math.abs(Number(currentTick)) * 0.02));
+      const range = Math.max(
+        1,
+        Math.round(Math.abs(Number(currentTick)) * 0.02),
+      );
       const lower = currentTick - range;
       const upper = currentTick + range;
 
@@ -303,7 +359,9 @@ export function Pools({ signer }: PoolProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Token A */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-muted-foreground">Token 1</label>
+              <label className="block text-sm font-medium text-muted-foreground">
+                Token 1
+              </label>
               <Button
                 variant="glass"
                 className="w-full justify-between"
@@ -326,7 +384,9 @@ export function Pools({ signer }: PoolProps) {
 
             {/* Token B */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-muted-foreground">Token 2</label>
+              <label className="block text-sm font-medium text-muted-foreground">
+                Token 2
+              </label>
               <Button
                 variant="glass"
                 className="w-full justify-between"
@@ -349,13 +409,15 @@ export function Pools({ signer }: PoolProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">Fee Tier</label>
+            <label className="block text-sm font-medium text-muted-foreground mb-2">
+              Fee Tier
+            </label>
             <select
               value={feeTier}
               onChange={(e) => setFeeTier(Number(e.target.value))}
               className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
             >
-              <option value={100}>0.01% - Stable pairs</option>
+              {/* <option value={100}>0.01% - Stable pairs</option> */}
               <option value={500}>0.05% - Stable pairs</option>
               <option value={3000}>0.3% - Most pairs</option>
               <option value={10000}>1% - Exotic pairs</option>
@@ -420,7 +482,9 @@ export function Pools({ signer }: PoolProps) {
             </div>
           ) : activeTab === "all" ? (
             filteredPools.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">No pools found</div>
+              <div className="text-center py-8 text-muted-foreground">
+                No pools found
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -428,14 +492,23 @@ export function Pools({ signer }: PoolProps) {
                     <tr>
                       <th className="text-left px-4 py-3 font-medium">Pool</th>
                       <th className="text-left px-4 py-3 font-medium">TVL</th>
-                      <th className="text-left px-4 py-3 font-medium">Volume</th>
-                      <th className="text-left px-4 py-3 font-medium">Fee Tier</th>
-                      <th className="text-right px-4 py-3 font-medium">Action</th>
+                      <th className="text-left px-4 py-3 font-medium">
+                        Volume
+                      </th>
+                      <th className="text-left px-4 py-3 font-medium">
+                        Fee Tier
+                      </th>
+                      <th className="text-right px-4 py-3 font-medium">
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredPools.map((pool: Pool) => (
-                      <tr key={pool.id} className="hover:bg-muted/50 transition-colors">
+                      <tr
+                        key={pool.id}
+                        className="hover:bg-muted/50 transition-colors"
+                      >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <img
@@ -454,10 +527,18 @@ export function Pools({ signer }: PoolProps) {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          ${parseFloat(pool.totalValueLockedUSD).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          $
+                          {parseFloat(pool.totalValueLockedUSD).toLocaleString(
+                            undefined,
+                            { maximumFractionDigits: 0 },
+                          )}
                         </td>
                         <td className="px-4 py-3">
-                          ${parseFloat(pool.volumeUSD).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          $
+                          {parseFloat(pool.volumeUSD).toLocaleString(
+                            undefined,
+                            { maximumFractionDigits: 0 },
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <Badge variant="secondary">
@@ -482,30 +563,47 @@ export function Pools({ signer }: PoolProps) {
               </div>
             )
           ) : userPositions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No positions found</div>
+            <div className="text-center py-8 text-muted-foreground">
+              No positions found
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="border-b border-border">
                   <tr>
-                    <th className="text-left px-4 py-3 font-medium">Position</th>
-                    <th className="text-left px-4 py-3 font-medium">Liquidity</th>
-                    <th className="text-left px-4 py-3 font-medium">Fee Tier</th>
+                    <th className="text-left px-4 py-3 font-medium">
+                      Position
+                    </th>
+                    <th className="text-left px-4 py-3 font-medium">
+                      Liquidity
+                    </th>
+                    <th className="text-left px-4 py-3 font-medium">
+                      Fee Tier
+                    </th>
                     <th className="text-right px-4 py-3 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {userPositions.map((pos: any, index: number) => (
-                    <tr key={index} className="hover:bg-muted/50 transition-colors">
+                    <tr
+                      key={index}
+                      className="hover:bg-muted/50 transition-colors"
+                    >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <img
-                            src={pos.token0?.logoURI || "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png"}
+                            src={
+                              pos.token0?.logoURI ||
+                              "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png"
+                            }
                             alt={pos.token0?.symbol}
                             className="w-6 h-6 rounded-full"
                           />
                           <img
-                            src={pos.token1?.logoURI || "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png"}
+                            src={
+                              pos.token1?.logoURI ||
+                              "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png"
+                            }
                             alt={pos.token1?.symbol}
                             className="w-6 h-6 rounded-full -ml-2"
                           />
@@ -515,11 +613,19 @@ export function Pools({ signer }: PoolProps) {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        {pos.liquidity ? parseFloat(pos.liquidity).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0"}
+                        {pos.liquidity
+                          ? parseFloat(pos.liquidity).toLocaleString(
+                              undefined,
+                              { maximumFractionDigits: 2 },
+                            )
+                          : "0"}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary">
-                          {pos.fee ? (Number(pos.fee) / 10000).toFixed(2) : "0.00"}%
+                          {pos.fee
+                            ? (Number(pos.fee) / 10000).toFixed(2)
+                            : "0.00"}
+                          %
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right">

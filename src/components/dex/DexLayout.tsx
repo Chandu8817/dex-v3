@@ -5,7 +5,6 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ChainSelector } from '@/components/dex/ChainSelector';
 import { SwapCard } from '@/components/dex/SwapCard';
 import { LiquidityCard } from '@/components/dex/LiquidityCard';
-import { PositionsPanel } from '@/components/dex/PositionsPanel';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ethers } from 'ethers';
@@ -17,7 +16,7 @@ type Tab = 'swap' | 'liquidity' | 'positions' | 'pools' | 'history';
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'swap', label: 'Swap', icon: <ArrowLeftRight className="h-4 w-4" /> },
   { id: 'liquidity', label: 'Liquidity', icon: <Droplets className="h-4 w-4" /> },
-  { id: 'positions', label: 'Positions', icon: <LayoutGrid className="h-4 w-4" /> },
+ 
   { id: 'pools', label: 'Pools', icon: <BarChart3 className="h-4 w-4" /> },
   { id: 'history', label: 'History', icon: <History className="h-4 w-4" /> },
 ];
@@ -141,7 +140,6 @@ export function DexLayout() {
           >
             {activeTab === 'swap' && <SwapCard signer={signer} />}
             {activeTab === 'liquidity' && <LiquidityCard signer={signer} />}
-            {activeTab === 'positions' && <PositionsPanel />}
             {activeTab === 'pools' &&<Pools signer={signer} />
 }
 

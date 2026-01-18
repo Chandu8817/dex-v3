@@ -34,6 +34,7 @@ import {
   hasSufficientBalance as checkSufficientBalance,
   canAddLiquidity,
 } from "./utils";
+import { getLpPreview } from "./utils/lpMath";
 
 export function LiquidityCard({ signer }: LiquidityCardProps) {
   const { isConnected, address } = useAccount();
@@ -56,9 +57,40 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   const [allowanceA, setAllowanceA] = useState("0");
   const [allowanceB, setAllowanceB] = useState("0");
   const [poolAddress, setPoolAddress] = useState("");
+  const [lpPreview, setLpPreview] = useState<any>(null);
+  const [imbalanceWarning, setImbalanceWarning] = useState<string | null>(null);
 
   // Refs for debouncing and cleanup
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastQuoteRequestRef = useRef<{ amount: string; result: string } | null>(null);
+  const isFetchingRef = useRef(false);
+
+  // Helper functions (must be defined before hooks that use them)
+  /**
+   * Convert ETH to WETH address for contract interactions
+   * but keep the original token reference for UI display
+   */
+  const getContractToken = useCallback((token: any) => {
+    if (token?.symbol === "ETH") {
+      const wethToken = COMMON_TOKENS[chainId]?.find((t) => t.symbol === "WETH");
+      return wethToken || token;
+    }
+    return token;
+  }, [chainId]);
+
+  /**
+   * Check if user selected native ETH (for msg.value calculation)
+   */
+  const isNativeETH = useCallback((token: any) => {
+    return token?.symbol === "ETH";
+  }, []);
+
+  /**
+   * Validate pool data before using it
+   */
+  const isValidPoolData = useCallback((poolData: any) => {
+    return poolData && poolData.sqrtPriceX96 && poolData.liquidity;
+  }, []);
 
   // Custom hooks
   const { notification, showNotification } = useLiquidityNotification();
@@ -95,8 +127,8 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   const isQuoteInitialized = true; // You may need to add this hook check
   const { fetchPool, getAmountOut, fetchAmountOut, fetchPriceAndPoolData } = usePriceData({
     signer,
-    token0: state.token0,
-    token1: state.token1,
+    token0: getContractToken(state.token0),
+    token1: getContractToken(state.token1),
     feeTier: state.feeTier,
     poolAddress,
     isInitialized,
@@ -132,15 +164,70 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
 
     if (!state.amount0) {
       setState((s) => ({ ...s, amount1: "" }));
+      lastQuoteRequestRef.current = null;
+      setLpPreview(null);
+      setImbalanceWarning(null);
       return;
     }
 
-    // Debounce the fetch call
-    debounceTimerRef.current = setTimeout(() => {
-      fetchAmountOut(state.amount0, (amount) => {
-        setState((s) => ({ ...s, amount1: amount }));
-      });
-    }, 300); // 300ms debounce
+    // Check cache first
+    if (lastQuoteRequestRef.current?.amount === state.amount0) {
+      setState((s) => ({ ...s, amount1: lastQuoteRequestRef.current!.result }));
+      return;
+    }
+
+    // Debounce the fetch call (reduced to 150ms for faster response)
+    debounceTimerRef.current = setTimeout(async () => {
+      // Prevent concurrent requests
+      if (isFetchingRef.current) return;
+      
+      isFetchingRef.current = true;
+      try {
+        // Use LP math if we have pool data and ticks
+        if (state.token0 && state.token1 && tickLower && tickUpper) {
+          // We'll calculate using contract tokens for accurate pool data
+          const contractToken0 = getContractToken(state.token0);
+          const contractToken1 = getContractToken(state.token1);
+          
+          // Fetch fresh pool data
+          const data = await fetchPriceAndPoolData(poolAddress);
+          if (data?.poolData && isValidPoolData(data.poolData)) {
+            try {
+              const preview = getLpPreview(
+                data.poolData as any,
+                contractToken0 as any,
+                contractToken1 as any,
+                state.amount0,
+                state.amount1 || state.amount0, // Use amount0 as fallback estimate
+                Number(tickLower),
+                Number(tickUpper)
+              );
+              
+              setState((s) => ({ ...s, amount1: preview.amount1Used }));
+              setLpPreview(preview);
+              setImbalanceWarning(preview.warning);
+              
+              // Cache the result
+              lastQuoteRequestRef.current = { amount: state.amount0, result: preview.amount1Used };
+              isFetchingRef.current = false;
+              return;
+            } catch (lpError) {
+              console.error("LP math error, falling back to quote:", lpError);
+            }
+          }
+        }
+
+        // Fallback to swap-based quote if LP math fails
+        fetchAmountOut(state.amount0, (amount) => {
+          setState((s) => ({ ...s, amount1: amount }));
+          lastQuoteRequestRef.current = { amount: state.amount0, result: amount };
+          isFetchingRef.current = false;
+        });
+      } catch (err) {
+        console.error("Failed to fetch amount out:", err);
+        isFetchingRef.current = false;
+      }
+    }, 150); // Reduced from 300ms to 150ms for faster response
 
     // Cleanup on unmount or when amount0 changes again
     return () => {
@@ -148,21 +235,25 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [state.amount0, fetchAmountOut]);
+  }, [state.amount0, state.amount1, state.token0, state.token1, tickLower, tickUpper, fetchAmountOut, fetchPriceAndPoolData, getContractToken, poolAddress]);
 
   // Fetch price data
   useEffect(() => {
     if (!state.token0 || !state.token1 || !signer) return;
 
     const fetchPriceData = async () => {
+      const contractToken0 = getContractToken(state.token0);
+      const contractToken1 = getContractToken(state.token1);
+      
       let pool = poolAddress;
       if (!pool) {
-        pool = await fetchPool(state.token0!, state.token1!, state.feeTier);
+        pool = await fetchPool(contractToken0, contractToken1, state.feeTier);
         if (!pool || pool === ethers.ZeroAddress) return;
       }
 
       const data = await fetchPriceAndPoolData(pool);
       if (data) {
+        
         setCurrentPrice(data.priceData.currentPrice);
         setPriceRangeSuggestions(data.priceData.priceRangeSuggestions);
         setTickLower(data.tickLower);
@@ -171,36 +262,33 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     };
 
     fetchPriceData();
-  }, [state.token0?.address, state.token1?.address, state.feeTier]);
+  }, [state.token0?.address, state.token1?.address, state.feeTier, fetchPool, fetchPriceAndPoolData, getContractToken, poolAddress]);
 
   // Handler functions
-  const normalizeToken = useCallback((token) => {
-    if (token.symbol === "ETH") {
-      const wethToken = COMMON_TOKENS[chainId]?.find((t) => t.symbol === "WETH");
-      return wethToken || token;
-    }
-    return token;
-  }, [chainId]);
-
   const handleTokenSelect = (token) => {
-    const normalizedToken = normalizeToken(token);
-    
+    // Keep the user's selection as-is (ETH or WETH) for UI display
     if (tokenSelectorOpen === "token0") {
-      // Check if trying to select the same token
-      if (normalizedToken.address === state.token1?.address) {
+      const contractToken0 = getContractToken(token);
+      const contractToken1 = getContractToken(state.token1);
+      
+      // Check if trying to select the same token (using contract addresses)
+      if (contractToken0?.address === contractToken1?.address) {
         toast.error("Cannot select the same token for both sides");
         setTokenSelectorOpen(null);
         return;
       }
-      setState((s) => ({ ...s, token0: normalizedToken, amount0: "", amount1: "" }));
+      setState((s) => ({ ...s, token0: token, amount0: "", amount1: "" }));
     } else {
-      // Check if trying to select the same token
-      if (normalizedToken.address === state.token0?.address) {
+      const contractToken0 = getContractToken(state.token0);
+      const contractToken1 = getContractToken(token);
+      
+      // Check if trying to select the same token (using contract addresses)
+      if (contractToken0?.address === contractToken1?.address) {
         toast.error("Cannot select the same token for both sides");
         setTokenSelectorOpen(null);
         return;
       }
-      setState((s) => ({ ...s, token1: normalizedToken, amount0: "", amount1: "" }));
+      setState((s) => ({ ...s, token1: token, amount0: "", amount1: "" }));
     }
     setTokenSelectorOpen(null);
   };
@@ -224,9 +312,10 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     if (!state.amount0 || !state.token0) return;
     try {
       setIsProcessing(true);
+      const contractToken = getContractToken(state.token0);
       await handleApproveTokenA(
         state.amount0,
-        state.token0,
+        contractToken,
         POSITION_MANAGER_ADDRESS!
       );
       showNotification("success", "Token A approved successfully!");
@@ -246,9 +335,10 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     if (!state.amount1 || !state.token1) return;
     try {
       setIsProcessing(true);
+      const contractToken = getContractToken(state.token1);
       await handleApproveTokenB(
         state.amount1,
-        state.token1,
+        contractToken,
         POSITION_MANAGER_ADDRESS!
       );
       showNotification("success", "Token B approved successfully!");
@@ -310,42 +400,53 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     try {
       setIsProcessing(true);
 
+      // Use contract tokens for pool/mint operations
+      const contractToken0 = getContractToken(state.token0);
+      const contractToken1 = getContractToken(state.token1);
+
       // Fetch pool if not already done
       if (!poolAddress) {
-        const pool = await fetchPool(state.token0, state.token1, state.feeTier);
+        const pool = await fetchPool(contractToken0, contractToken1, state.feeTier);
         if (!pool || pool === ethers.ZeroAddress) {
           return;
         }
         setPoolAddress(pool);
       }
 
-      // Sort tokens by address
+      // Sort tokens by address (using contract tokens)
       const token0 =
-        state.token0.address.toLowerCase() <
-        state.token1.address.toLowerCase()
-          ? state.token0
-          : state.token1;
+        contractToken0.address.toLowerCase() <
+        contractToken1.address.toLowerCase()
+          ? contractToken0
+          : contractToken1;
       const token1 =
-        state.token0.address.toLowerCase() <
-        state.token1.address.toLowerCase()
-          ? state.token1
-          : state.token0;
+        contractToken0.address.toLowerCase() <
+        contractToken1.address.toLowerCase()
+          ? contractToken1
+          : contractToken0;
 
       const amount0Desired =
-        token0 === state.token0
-          ? ethers.parseUnits(state.amount0, Number(state.token0.decimals))
-          : ethers.parseUnits(state.amount1, Number(state.token1.decimals));
+        token0.address === contractToken0.address
+          ? ethers.parseUnits(state.amount0, Number(contractToken0.decimals))
+          : ethers.parseUnits(state.amount1, Number(contractToken1.decimals));
       const amount1Desired =
-        token0 === state.token0
-          ? ethers.parseUnits(state.amount1, Number(state.token1.decimals))
-          : ethers.parseUnits(state.amount0, Number(state.token0.decimals));
+        token0.address === contractToken0.address
+          ? ethers.parseUnits(state.amount1, Number(contractToken1.decimals))
+          : ethers.parseUnits(state.amount0, Number(contractToken0.decimals));
 
       const tl = tickLower ? BigInt(tickLower) : -887220n;
       const tu = tickUpper ? BigInt(tickUpper) : 887220n;
 
-      const slippageBasisPoints = BigInt(Math.floor(0.5 * 100));
-      const amount0Min = (amount0Desired * (10000n - slippageBasisPoints)) / 10000n;
-      const amount1Min = (amount1Desired * (10000n - slippageBasisPoints)) / 10000n;
+      // Use user input amounts as desired, let contract calculate actual usage
+      // with concentrated liquidity math
+      let finalAmount0Desired = amount0Desired;
+      let finalAmount1Desired = amount1Desired;
+
+      // Set minimums to 0 since LP math already accounts for slippage
+      // The actual amounts used will be calculated by the contract based on
+      // the concentrated liquidity position
+      const amount0Min = 0n;
+      const amount1Min = 0n;
 
       const params = {
         token0: token0.address,
@@ -353,19 +454,20 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
         fee: state.feeTier,
         tickLower: Number(tl),
         tickUpper: Number(tu),
-        amount0Desired,
-        amount1Desired,
+        amount0Desired: finalAmount0Desired,
+        amount1Desired: finalAmount1Desired,
         amount0Min: amount0Min,
         amount1Min: amount1Min,
         recipient: address,
         deadline: Math.floor(Date.now() / 1000) + 30 * 60,
       };
 
+      // Only send native ETH if user selected ETH (not WETH)
       const value =
-        state.token0.symbol === "ETH"
-          ? amount0Desired
-          : state.token1.symbol === "ETH"
-          ? amount1Desired
+        isNativeETH(state.token0)
+          ? finalAmount0Desired
+          : isNativeETH(state.token1)
+          ? finalAmount1Desired
           : 0n;
 
       const tx = await mint(params, value);

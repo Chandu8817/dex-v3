@@ -4,6 +4,7 @@ import { JsonRpcSigner } from 'ethers';
 import POSITION_MANAGER_ABI from '../abis/PositionManager.json';
 import { uniswapContracts } from '@/lib/web3/config';
 import { useChainId } from 'wagmi';
+import { Token } from '@/lib/web3/tokens';
 
 
 // Types
@@ -51,6 +52,7 @@ export const usePositionManager = (signer: JsonRpcSigner | null) => {
   const [contract, setContract] = useState<ethers.Contract | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  
   const chainId  = useChainId();
   const POSITION_MANAGER_ADDRESS = uniswapContracts[chainId]?.positionManager;
 
@@ -336,6 +338,56 @@ export const usePositionManager = (signer: JsonRpcSigner | null) => {
     
     return { amount0: amounts.amount0, amount1: amounts.amount1 }
   }
+    function encodeSqrtRatioX96(amount1: bigint, amount0: bigint) {
+    if (amount0 === 0n) throw new Error('amount0 cannot be 0');
+    const ratio = Number(amount1) / Number(amount0);
+    const sqrt = Math.sqrt(ratio);
+    const Q96 = 2 ** 96;
+    return BigInt(Math.floor(sqrt * Q96));
+  }
+
+   const createAndInitializePoolIfNecessary = useCallback(
+      async (
+        signer: ethers.Signer,
+        tokenA: Token,
+        tokenB: Token,
+        feeTier: number,
+        reserve0: bigint,
+        reserve1: bigint,
+        chainId: number
+      ): Promise<{txHash: string}> => {
+       
+        setError(null);
+        try {
+          const positionManagerAddress = uniswapContracts[chainId]?.positionManager;
+          if (!positionManagerAddress) {
+            throw new Error("Position manager not configured");
+          }
+          const contract = new ethers.Contract(
+            positionManagerAddress,
+            POSITION_MANAGER_ABI,
+            signer
+          );
+            const sqrtPriceX96 = encodeSqrtRatioX96(reserve1, reserve0);
+    console.log(sqrtPriceX96.toString());
+
+          const tx = await contract.createAndInitializePoolIfNecessary(
+            tokenA.address,
+            tokenB.address,
+            feeTier,
+            sqrtPriceX96
+          );
+          await tx.wait();
+          return {txHash: tx.hash};
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Unknown error");
+          throw err;
+        } finally {
+          setLoading(false);
+        }
+      },
+      []
+    );
   return {
     // Core Position Management
     mint,
@@ -346,6 +398,7 @@ export const usePositionManager = (signer: JsonRpcSigner | null) => {
     positions,
     getUserPositions,
     getAmountsDecreaseLiquidity,
+    createAndInitializePoolIfNecessary,
     // ERC721 Methods
     approve,
     setApprovalForAll,

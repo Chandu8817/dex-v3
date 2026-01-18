@@ -1,6 +1,7 @@
-import { ethers, JsonRpcSigner } from 'ethers';
+import { ethers, JsonRpcSigner, keccak256, solidityPacked } from 'ethers';
 import POOL_ABI from '../abis/Pool.json';
 import { useState } from 'react';
+import { uniswapContracts } from '@/lib/web3/config';
 // import { encodeSqrtRatioX96 } from "../utils";
 
 export function usePool(signer: JsonRpcSigner | null) {
@@ -133,6 +134,37 @@ const getCurrentPrice = async (
 };
 
 
+
+ function computeUniswapV3PoolAddress(
+
+  tokenA: string,
+  tokenB: string,
+  fee: number,
+  chainId: number
+): string {
+
+  const salt = keccak256(
+    solidityPacked(
+      ["address", "address", "uint24"],
+      [tokenA, tokenB, fee]
+    )
+  );
+
+  const POOL_INIT_CODE_HASH =
+    "0xe34f4c7f9f3e6b2f9f9b16c0daac82466e0e5c5e8f7ff7f6ba674498b6ff157a";
+const FACTORY_ADDRESS = uniswapContracts[chainId]?.factory;
+  const raw = keccak256(
+    solidityPacked(
+      ["bytes1", "address", "bytes32", "bytes32"],
+      ["0xff", FACTORY_ADDRESS, salt, POOL_INIT_CODE_HASH]
+    )
+  );
+
+  return "0x" + raw.slice(-40);
+}
+
+
+
   return {
     initializePool,
     isPoolInitialized,
@@ -142,5 +174,6 @@ const getCurrentPrice = async (
     getTickSpacing,
     getFee,
     getCurrentPrice,
+    computeUniswapV3PoolAddress
   };
 }
