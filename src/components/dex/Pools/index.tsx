@@ -21,9 +21,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from "lucide-react";
 import { useChainId } from "wagmi";
+import { add } from "date-fns";
+import { LiquidityManageModal } from "../PositionsPanel/LiquidityManageModal";
+import { Position } from "@/types";
 
 export interface PoolProps {
   signer: JsonRpcSigner | null;
+  onSelectPool?: (selection: { token0: Token; token1: Token; feeTier: number; poolAddress?: string }) => void;
 }
 
 interface Pool {
@@ -40,7 +44,7 @@ interface Pool {
 
 const POSITION_MANAGER_ADDRESS = "0xC36442b4a4522E871399CD717aBDD847Ab11fe88";
 
-export function Pools({ signer }: PoolProps) {
+export function Pools({ signer, onSelectPool }: PoolProps) {
   const [pools, setPools] = useState<Pool[]>([]);
   const [userPositions, setUserPositions] = useState<Pool[]>([]);
   const [tokenA, setTokenA] = useState<Token | null>(null);
@@ -53,7 +57,9 @@ export function Pools({ signer }: PoolProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
-  const [selectedPosition, setSelectedPosition] = useState<Pool | null>(null);
+  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
+  const [selectedPool, setSelectedPool] = useState<Pool | null>(null);
+
   const [tokenSelectorOpenFor, setTokenSelectorOpenFor] = useState<
     "token0" | "token1" | null
   >(null);
@@ -95,12 +101,14 @@ export function Pools({ signer }: PoolProps) {
         ...pool,
         token0: {
           ...pool.token0,
+          address: pool.token0.id,
           logoURI:
             token0Logo?.url ||
             "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
         },
         token1: {
           ...pool.token1,
+          address: pool.token1.id,
           logoURI:
             token1Logo?.url ||
             "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
@@ -118,38 +126,63 @@ export function Pools({ signer }: PoolProps) {
 
       try {
         setIsLoading(true);
-        const userAddress = await signer.getAddress();
+  
+         const userAddress = await signer.getAddress();
         const positions = await getUserPositions(userAddress);
+      
+
+
+
 
         // Map positions with token data
-        const detailedPositions = positions
-          .map((pos: any) => {
-            // Validate that token addresses exist and are valid
-            if (
-              !pos.token0 ||
-              !pos.token1 ||
-              typeof pos.token0 !== "string" ||
-              typeof pos.token1 !== "string"
-            ) {
-              return null;
-            }
+     const detailedPositions = (
+  await Promise.all(
+    positions.map(async (pos: any) => {
+      if (
+        !pos.token0 ||
+        !pos.token1 ||
+        typeof pos.token0 !== "string" ||
+        typeof pos.token1 !== "string"
+      ) {
+        return null;
+      }
 
-            const token0 = getTokenByAddress(pos.token0);
-            const token1 = getTokenByAddress(pos.token1);
+      const token0 = getTokenByAddress(pos.token0);
+      const token1 = getTokenByAddress(pos.token1);
 
-            // Skip positions where we can't find token data
-            if (!token0 || !token1) {
-              return null;
-            }
+      if (!token0 || !token1) return null;
 
-            return {
-              ...pos,
-              token0,
-              token1,
-            };
-          })
-          .filter((pos) => pos !== null);
+      const sortedTokens = [token0, token1].sort((a, b) =>
+        a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1
+      ) as [Token, Token];
 
+      const [sortedToken0, sortedToken1] = sortedTokens;
+
+      const poolAddress = await getPoolAddress(
+        sortedToken0,
+        sortedToken1,
+        feeTier
+       
+      );
+
+      let inRange = false;
+      const slot0 = await getSlot0(poolAddress);
+     if (!slot0) return null;
+       inRange =
+        slot0.tick >= pos.tickLower &&
+        slot0.tick < pos.tickUpper;
+
+      return {
+        ...pos,
+        token0,
+        token1,
+        inRange,
+      };
+    })
+  )
+).filter(Boolean);
+
+console.log("Detailed user positions:", detailedPositions);
         setUserPositions(detailedPositions);
       } catch (err) {
         console.error("Error fetching user positions:", err);
@@ -241,7 +274,7 @@ export function Pools({ signer }: PoolProps) {
           sortedToken1.address,
           feeTier,
           chainId)
-      debugger
+      
       const { txHash,  } =
         await createAndInitializePoolIfNecessary(
           signer,
@@ -323,8 +356,23 @@ export function Pools({ signer }: PoolProps) {
   });
 
   const handleAddLiquidity = (pool: Pool) => {
-    setSelectedPosition(pool);
+    
+    setSelectedPool(pool);
     setIsManageModalOpen(true);
+    onSelectPool?.({ token0: pool.token0, token1: pool.token1, feeTier: Number(pool.feeTier), poolAddress: pool.id });
+  };
+
+  const handleManageLiquidity = (pool: Position) => {
+    
+    try {
+   
+
+       setSelectedPosition(pool);
+      setIsManageModalOpen(true);
+    } catch (error) {
+      console.error('Error in handleManageLiquidity:', error);
+      // In a real app, show a user-friendly error message
+    }
   };
 
   if (error) {
@@ -350,6 +398,14 @@ export function Pools({ signer }: PoolProps) {
 
   return (
     <div className="space-y-6">
+          <LiquidityManageModal
+        isOpen={isManageModalOpen}
+        onClose={() => setIsManageModalOpen(false)}
+        signer={signer as ethers.JsonRpcSigner}
+        position={selectedPosition || undefined}
+        mode="increase"
+
+      />
       {/* Pool Creation Section */}
       <Card variant="glass">
         <CardHeader>
@@ -632,7 +688,7 @@ export function Pools({ signer }: PoolProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleAddLiquidity(pos)}
+                          onClick={() => handleManageLiquidity(pos)}
                         >
                           Manage
                         </Button>

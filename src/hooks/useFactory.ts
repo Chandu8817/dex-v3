@@ -85,7 +85,7 @@ export function useFactory(signer: JsonRpcSigner | null) {
 
       const [token0, token1] =
         tokenA.address.toLowerCase() < tokenB.address.toLowerCase() ? [tokenA, tokenB] : [tokenB, tokenA];
-debugger
+
       const tx = await factoryContract.createPool(token0.address, token1.address, feeTier);
       await tx.wait();
       const newPoolAddress = await getPoolAddress(token0, token1, feeTier);

@@ -9,7 +9,11 @@ import { usePositionManager } from "@/hooks/usePositionManager";
 import { COMMON_TOKENS, getNativeToken } from "@/lib/web3/tokens";
 import { toast } from "sonner";
 
-import { LiquidityCardProps, LiquidityState, PriceRangeSuggestion } from "./types";
+import {
+  LiquidityCardProps,
+  LiquidityState,
+  PriceRangeSuggestion,
+} from "./types";
 import {
   useLiquidityNotification,
   useLiquidityProcessing,
@@ -34,35 +38,71 @@ import {
   hasSufficientBalance as checkSufficientBalance,
   canAddLiquidity,
 } from "./utils";
-import { getLpPreview } from "./utils/lpMath";
 
-export function LiquidityCard({ signer }: LiquidityCardProps) {
+import { getAmount1FromAmount0, quoteToken1FromToken0, tickToSqrtPriceX96 } from "@/lib/uniswapV3/getLPAmount";
+import { usePool } from "@/hooks/usePool";
+
+export function LiquidityCard({
+  signer,
+  initialToken0,
+  initialToken1,
+  initialFeeTier,
+  initialPoolAddress,
+}: LiquidityCardProps) {
   const { isConnected, address } = useAccount();
   const chainId = useChainId();
   const POSITION_MANAGER_ADDRESS = uniswapContracts[chainId]?.positionManager;
+  const { getCurrentPrice, getSlot0, getTickSpacing } = usePool(signer);
 
   // State management
   const [state, setState] = useState<LiquidityState>(() => ({
-    token0: null,
-    token1: null,
+    token0: initialToken0 ?? null,
+    token1: initialToken1 ?? null,
     amount0: "",
     amount1: "",
-    feeTier: FEE_TIERS.MEDIUM,
+    feeTier: initialFeeTier ?? FEE_TIERS.MEDIUM,
     minPrice: "",
     maxPrice: "",
   }));
+  // Apply incoming defaults from navigation (e.g., selecting a pool)
+  useEffect(() => {
+    if (
+      !initialToken0 &&
+      !initialToken1 &&
+      initialFeeTier == null &&
+      !initialPoolAddress
+    )
+      return;
+
+    setState((s) => ({
+      ...s,
+      token0: initialToken0 ?? s.token0,
+      token1: initialToken1 ?? s.token1,
+      feeTier: initialFeeTier ?? s.feeTier,
+      amount0: "",
+      amount1: "",
+    }));
+    setPoolAddress(initialPoolAddress ?? "");
+  }, [
+    initialToken0?.address,
+    initialToken1?.address,
+    initialFeeTier,
+    initialPoolAddress,
+  ]);
 
   const [balanceA, setBalanceA] = useState("0");
   const [balanceB, setBalanceB] = useState("0");
   const [allowanceA, setAllowanceA] = useState("0");
   const [allowanceB, setAllowanceB] = useState("0");
-  const [poolAddress, setPoolAddress] = useState("");
+  const [poolAddress, setPoolAddress] = useState(initialPoolAddress ?? "");
   const [lpPreview, setLpPreview] = useState<any>(null);
   const [imbalanceWarning, setImbalanceWarning] = useState<string | null>(null);
 
   // Refs for debouncing and cleanup
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastQuoteRequestRef = useRef<{ amount: string; result: string } | null>(null);
+  const lastQuoteRequestRef = useRef<{ amount: string; result: string } | null>(
+    null,
+  );
   const isFetchingRef = useRef(false);
 
   // Helper functions (must be defined before hooks that use them)
@@ -70,13 +110,18 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
    * Convert ETH to WETH address for contract interactions
    * but keep the original token reference for UI display
    */
-  const getContractToken = useCallback((token: any) => {
-    if (token?.symbol === "ETH") {
-      const wethToken = COMMON_TOKENS[chainId]?.find((t) => t.symbol === "WETH");
-      return wethToken || token;
-    }
-    return token;
-  }, [chainId]);
+  const getContractToken = useCallback(
+    (token: any) => {
+      if (token?.symbol === "ETH") {
+        const wethToken = COMMON_TOKENS[chainId]?.find(
+          (t) => t.symbol === "WETH",
+        );
+        return wethToken || token;
+      }
+      return token;
+    },
+    [chainId],
+  );
 
   /**
    * Check if user selected native ETH (for msg.value calculation)
@@ -95,8 +140,12 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   // Custom hooks
   const { notification, showNotification } = useLiquidityNotification();
   const { isProcessing, setIsProcessing } = useLiquidityProcessing();
-  const { tokenSelectorOpen, setTokenSelectorOpen, isFullRange, setIsFullRange } =
-    useTokenSelector();
+  const {
+    tokenSelectorOpen,
+    setTokenSelectorOpen,
+    isFullRange,
+    setIsFullRange,
+  } = useTokenSelector();
   const {
     tickLower,
     setTickLower,
@@ -116,30 +165,24 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     positionManagerAddress: POSITION_MANAGER_ADDRESS,
   });
   // External hooks
-  const {
-    mint,
-    contract,
-    isInitialized,
-    approve,
-  } = usePositionManager(signer);
+  const { mint, contract, isInitialized, approve } = usePositionManager(signer);
 
   // Check if hooks are ready
   const isQuoteInitialized = true; // You may need to add this hook check
-  const { fetchPool, getAmountOut, fetchAmountOut, fetchPriceAndPoolData } = usePriceData({
-    signer,
-    token0: getContractToken(state.token0),
-    token1: getContractToken(state.token1),
-    feeTier: state.feeTier,
-    poolAddress,
-    isInitialized,
-    isQuoteInitialized,
-  });
+  const { fetchPool, getAmountOut, fetchAmountOut, fetchPriceAndPoolData } =
+    usePriceData({
+      signer,
+      token0: getContractToken(state.token0),
+      token1: getContractToken(state.token1),
+      feeTier: state.feeTier,
+      poolAddress,
+      isInitialized,
+      isQuoteInitialized,
+    });
 
   const { handleApproveTokenA, handleApproveTokenB } = useApprovals({
     signer,
   });
-
-
 
   // Fetch balances when tokens change
   useEffect(() => {
@@ -156,86 +199,104 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   }, [state.token0, state.token1, fetchBalancesAndAllowances]);
 
   // Fetch amount out when amount0 changes (with debouncing and caching)
-  useEffect(() => {
-    // Clear previous timer
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
+  // useEffect(() => {
+  //   // Clear previous timer
+  //   if (debounceTimerRef.current) {
+  //     clearTimeout(debounceTimerRef.current);
+  //   }
 
-    if (!state.amount0) {
-      setState((s) => ({ ...s, amount1: "" }));
-      lastQuoteRequestRef.current = null;
-      setLpPreview(null);
-      setImbalanceWarning(null);
-      return;
-    }
+  //   if (!state.amount0) {
+  //     setState((s) => ({ ...s, amount1: "" }));
+  //     lastQuoteRequestRef.current = null;
+  //     setLpPreview(null);
+  //     setImbalanceWarning(null);
+  //     return;
+  //   }
 
-    // Check cache first
-    if (lastQuoteRequestRef.current?.amount === state.amount0) {
-      setState((s) => ({ ...s, amount1: lastQuoteRequestRef.current!.result }));
-      return;
-    }
+  //   // Check cache first
+  //   if (lastQuoteRequestRef.current?.amount === state.amount0) {
+  //     setState((s) => ({ ...s, amount1: lastQuoteRequestRef.current!.result }));
+  //     return;
+  //   }
 
-    // Debounce the fetch call (reduced to 150ms for faster response)
-    debounceTimerRef.current = setTimeout(async () => {
-      // Prevent concurrent requests
-      if (isFetchingRef.current) return;
-      
-      isFetchingRef.current = true;
-      try {
-        // Use LP math if we have pool data and ticks
-        if (state.token0 && state.token1 && tickLower && tickUpper) {
-          // We'll calculate using contract tokens for accurate pool data
-          const contractToken0 = getContractToken(state.token0);
-          const contractToken1 = getContractToken(state.token1);
-          
-          // Fetch fresh pool data
-          const data = await fetchPriceAndPoolData(poolAddress);
-          if (data?.poolData && isValidPoolData(data.poolData)) {
-            try {
-              const preview = getLpPreview(
-                data.poolData as any,
-                contractToken0 as any,
-                contractToken1 as any,
-                state.amount0,
-                state.amount1 || state.amount0, // Use amount0 as fallback estimate
-                Number(tickLower),
-                Number(tickUpper)
-              );
-              
-              setState((s) => ({ ...s, amount1: preview.amount1Used }));
-              setLpPreview(preview);
-              setImbalanceWarning(preview.warning);
-              
-              // Cache the result
-              lastQuoteRequestRef.current = { amount: state.amount0, result: preview.amount1Used };
-              isFetchingRef.current = false;
-              return;
-            } catch (lpError) {
-              console.error("LP math error, falling back to quote:", lpError);
-            }
-          }
-        }
+  //   // Debounce the fetch call (reduced to 150ms for faster response)
+  //   debounceTimerRef.current = setTimeout(async () => {
+  //     // Prevent concurrent requests
+  //     if (isFetchingRef.current) return;
 
-        // Fallback to swap-based quote if LP math fails
-        fetchAmountOut(state.amount0, (amount) => {
-          setState((s) => ({ ...s, amount1: amount }));
-          lastQuoteRequestRef.current = { amount: state.amount0, result: amount };
-          isFetchingRef.current = false;
-        });
-      } catch (err) {
-        console.error("Failed to fetch amount out:", err);
-        isFetchingRef.current = false;
-      }
-    }, 150); // Reduced from 300ms to 150ms for faster response
+  //     isFetchingRef.current = true;
+  //     try {
+  //       // Use LP math if we have pool data and ticks
+  //       if (state.token0 && state.token1 && tickLower && tickUpper) {
+  //         // We'll calculate using contract tokens for accurate pool data
+  //         const contractToken0 = getContractToken(state.token0);
+  //         const contractToken1 = getContractToken(state.token1);
 
-    // Cleanup on unmount or when amount0 changes again
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, [state.amount0, state.amount1, state.token0, state.token1, tickLower, tickUpper, fetchAmountOut, fetchPriceAndPoolData, getContractToken, poolAddress]);
+  //         // Fetch fresh pool data
+  //         const data = await fetchPriceAndPoolData(poolAddress);
+  //         if (data?.poolData && isValidPoolData(data.poolData)) {
+  //           try {
+  //             const preview = getLpPreview(
+  //               data.poolData as any,
+  //               contractToken0 as any,
+  //               contractToken1 as any,
+  //               state.amount0,
+  //               state.amount1 || state.amount0, // Use amount0 as fallback estimate
+  //               Number(tickLower),
+  //               Number(tickUpper),
+  //             );
+  //             debugger;
+
+  //             setState((s) => ({ ...s, amount1: preview.amount1Used }));
+  //             setLpPreview(preview);
+  //             setImbalanceWarning(preview.warning);
+
+  //             // Cache the result
+  //             lastQuoteRequestRef.current = {
+  //               amount: state.amount0,
+  //               result: preview.amount1Used,
+  //             };
+  //             isFetchingRef.current = false;
+  //             return;
+  //           } catch (lpError) {
+  //             console.error("LP math error, falling back to quote:", lpError);
+  //           }
+  //         }
+  //       }
+
+  //       // Fallback to swap-based quote if LP math fails
+  //       fetchAmountOut(state.amount0, (amount) => {
+  //         setState((s) => ({ ...s, amount1: amount }));
+  //         lastQuoteRequestRef.current = {
+  //           amount: state.amount0,
+  //           result: amount,
+  //         };
+  //         isFetchingRef.current = false;
+  //       });
+  //     } catch (err) {
+  //       console.error("Failed to fetch amount out:", err);
+  //       isFetchingRef.current = false;
+  //     }
+  //   }, 150); // Reduced from 300ms to 150ms for faster response
+
+  //   // Cleanup on unmount or when amount0 changes again
+  //   return () => {
+  //     if (debounceTimerRef.current) {
+  //       clearTimeout(debounceTimerRef.current);
+  //     }
+  //   };
+  // }, [
+  //   state.amount0,
+  //   state.amount1,
+  //   state.token0,
+  //   state.token1,
+  //   tickLower,
+  //   tickUpper,
+  //   fetchAmountOut,
+  //   fetchPriceAndPoolData,
+  //   getContractToken,
+  //   poolAddress,
+  // ]);
 
   // Fetch price data
   useEffect(() => {
@@ -244,25 +305,37 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     const fetchPriceData = async () => {
       const contractToken0 = getContractToken(state.token0);
       const contractToken1 = getContractToken(state.token1);
-      
+
       let pool = poolAddress;
       if (!pool) {
         pool = await fetchPool(contractToken0, contractToken1, state.feeTier);
         if (!pool || pool === ethers.ZeroAddress) return;
+        setPoolAddress(pool);
       }
 
       const data = await fetchPriceAndPoolData(pool);
       if (data) {
+        const slot0 = await getSlot0(pool);
         
         setCurrentPrice(data.priceData.currentPrice);
         setPriceRangeSuggestions(data.priceData.priceRangeSuggestions);
         setTickLower(data.tickLower);
         setTickUpper(data.tickUpper);
+
       }
     };
 
     fetchPriceData();
-  }, [state.token0?.address, state.token1?.address, state.feeTier, fetchPool, fetchPriceAndPoolData, getContractToken, poolAddress]);
+  }, [
+    state.token0?.address,
+    state.token1?.address,
+    state.feeTier,
+    fetchPool,
+    fetchPriceAndPoolData,
+    getContractToken,
+    poolAddress,
+    signer,
+  ]);
 
   // Handler functions
   const handleTokenSelect = (token) => {
@@ -270,7 +343,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     if (tokenSelectorOpen === "token0") {
       const contractToken0 = getContractToken(token);
       const contractToken1 = getContractToken(state.token1);
-      
+
       // Check if trying to select the same token (using contract addresses)
       if (contractToken0?.address === contractToken1?.address) {
         toast.error("Cannot select the same token for both sides");
@@ -281,7 +354,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     } else {
       const contractToken0 = getContractToken(state.token0);
       const contractToken1 = getContractToken(token);
-      
+
       // Check if trying to select the same token (using contract addresses)
       if (contractToken0?.address === contractToken1?.address) {
         toast.error("Cannot select the same token for both sides");
@@ -316,7 +389,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
       await handleApproveTokenA(
         state.amount0,
         contractToken,
-        POSITION_MANAGER_ADDRESS!
+        POSITION_MANAGER_ADDRESS!,
       );
       showNotification("success", "Token A approved successfully!");
       const result = await fetchBalancesAndAllowances();
@@ -339,7 +412,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
       await handleApproveTokenB(
         state.amount1,
         contractToken,
-        POSITION_MANAGER_ADDRESS!
+        POSITION_MANAGER_ADDRESS!,
       );
       showNotification("success", "Token B approved successfully!");
       const result = await fetchBalancesAndAllowances();
@@ -370,12 +443,12 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     const tokenAApproved = isTokenApproved(
       state.amount0,
       allowanceA,
-      state.token0.decimals
+      state.token0.decimals,
     );
     const tokenBApproved = isTokenApproved(
       state.amount1,
       allowanceB,
-      state.token1.decimals
+      state.token1.decimals,
     );
 
     if (!tokenAApproved || !tokenBApproved) {
@@ -389,7 +462,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
       balanceA,
       balanceB,
       state.token0,
-      state.token1
+      state.token1,
     );
 
     if (!hasBalance) {
@@ -406,7 +479,11 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
 
       // Fetch pool if not already done
       if (!poolAddress) {
-        const pool = await fetchPool(contractToken0, contractToken1, state.feeTier);
+        const pool = await fetchPool(
+          contractToken0,
+          contractToken1,
+          state.feeTier,
+        );
         if (!pool || pool === ethers.ZeroAddress) {
           return;
         }
@@ -463,10 +540,9 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
       };
 
       // Only send native ETH if user selected ETH (not WETH)
-      const value =
-        isNativeETH(state.token0)
-          ? finalAmount0Desired
-          : isNativeETH(state.token1)
+      const value = isNativeETH(state.token0)
+        ? finalAmount0Desired
+        : isNativeETH(state.token1)
           ? finalAmount1Desired
           : 0n;
 
@@ -492,12 +568,12 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
   const isTokenAApproved = isTokenApproved(
     state.amount0,
     allowanceA,
-    state.token0?.decimals || 18
+    state.token0?.decimals || 18,
   );
   const isTokenBApproved = isTokenApproved(
     state.amount1,
     allowanceB,
-    state.token1?.decimals || 18
+    state.token1?.decimals || 18,
   );
   const hasSufficientBalance = checkSufficientBalance(
     state.amount0,
@@ -505,7 +581,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     balanceA,
     balanceB,
     state.token0,
-    state.token1
+    state.token1,
   );
 
   const canMint = canAddLiquidity(
@@ -516,8 +592,50 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
     state.amount1,
     isTokenAApproved,
     isTokenBApproved,
-    hasSufficientBalance
+    hasSufficientBalance,
   );
+  function formatUnits(value: bigint, decimals: number) {
+  const base = 10n ** BigInt(decimals)
+  const whole = value / base
+  const fraction = value % base
+  return `${whole}.${fraction.toString().padStart(decimals, "0").slice(0, 6)}`
+}
+
+const handleAmount0Change = async (value: string) => {
+  debugger
+  const slot0 = await getSlot0(poolAddress);
+  if (!slot0 || !tickLower || !tickUpper || !state.token0 || !state.token1) {
+    setState(s => ({ ...s, amount0: value }))
+    return
+  }
+try{
+
+
+  // parse user input safely
+  const amount0 =
+    BigInt(Math.floor(parseFloat(value) * 10 ** state.token0.decimals))
+
+  const sqrtLowerX96 = tickToSqrtPriceX96(tickLower)
+  const sqrtUpperX96 = tickToSqrtPriceX96(tickUpper)
+
+  const amount1Raw = quoteToken1FromToken0(
+    amount0,
+    slot0.sqrtPriceX96,
+    sqrtLowerX96,
+    sqrtUpperX96
+  )
+
+  setState(s => ({
+    ...s,
+    amount0: value,
+    amount1: amount1Raw ? formatUnits(amount1Raw, state.token1.decimals) : ""
+  }))
+} catch (err) {
+  console.error("Error in handleAmount0Change:", err);
+  setState(s => ({ ...s, amount0: value }))
+}
+}
+
 
   return (
     <>
@@ -558,9 +676,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
 
           <FeeTierSelector
             feeTier={state.feeTier}
-            onFeeTierChange={(fee) =>
-              setState((s) => ({ ...s, feeTier: fee }))
-            }
+            onFeeTierChange={(fee) => setState((s) => ({ ...s, feeTier: fee }))}
           />
 
           <PriceRangeInput
@@ -571,12 +687,8 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
             currentPrice={currentPrice}
             isFullRange={isFullRange}
             priceRangeSuggestions={priceRangeSuggestions}
-            onMinPriceChange={(v) =>
-              setState((s) => ({ ...s, minPrice: v }))
-            }
-            onMaxPriceChange={(v) =>
-              setState((s) => ({ ...s, maxPrice: v }))
-            }
+            onMinPriceChange={(v) => setState((s) => ({ ...s, minPrice: v }))}
+            onMaxPriceChange={(v) => setState((s) => ({ ...s, maxPrice: v }))}
             onFullRangeChange={setIsFullRange}
             onSuggestionSelect={(suggestion) => {
               setState((s) => ({
@@ -594,7 +706,7 @@ export function LiquidityCard({ signer }: LiquidityCardProps) {
             amount1={state.amount1}
             balanceA={balanceA}
             balanceB={balanceB}
-            onAmount0Change={(v) => setState((s) => ({ ...s, amount0: v }))}
+            onAmount0Change={handleAmount0Change}
             onAmount1Change={(v) => setState((s) => ({ ...s, amount1: v }))}
           />
 

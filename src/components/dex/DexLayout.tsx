@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeftRight, Droplets, LayoutGrid, BarChart3, History, Menu, X } from 'lucide-react';
+import { ArrowLeftRight, Droplets, LayoutGrid, BarChart3, Menu, X } from 'lucide-react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ChainSelector } from '@/components/dex/ChainSelector';
 import { SwapCard } from '@/components/dex/SwapCard';
@@ -8,24 +8,32 @@ import { LiquidityCard } from '@/components/dex/LiquidityCard';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ethers } from 'ethers';
-import { useWalletClient } from 'wagmi';
+import { useWalletClient, useChainId } from 'wagmi';
 import { Pools } from './PoolsList';
+import { Token } from '@/lib/web3/tokens';
 
-type Tab = 'swap' | 'liquidity' | 'positions' | 'pools' | 'history';
+type Tab = 'swap' | 'liquidity' | 'positions' | 'pools' ;
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'swap', label: 'Swap', icon: <ArrowLeftRight className="h-4 w-4" /> },
   { id: 'liquidity', label: 'Liquidity', icon: <Droplets className="h-4 w-4" /> },
  
   { id: 'pools', label: 'Pools', icon: <BarChart3 className="h-4 w-4" /> },
-  { id: 'history', label: 'History', icon: <History className="h-4 w-4" /> },
+
 ];
 
 export function DexLayout() {
   const [activeTab, setActiveTab] = useState<Tab>('swap');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
+  const [liquidityDefaults, setLiquidityDefaults] = useState<{ token0: Token | null; token1: Token | null; feeTier: number | null; poolAddress: string | null }>({
+    token0: null,
+    token1: null,
+    feeTier: null,
+    poolAddress: null,
+  });
   const { data: walletClient, isSuccess } = useWalletClient();
+  const chainId = useChainId();
 
   useEffect(() => {
     async function setupSigner() {
@@ -139,18 +147,38 @@ export function DexLayout() {
             transition={{ duration: 0.2 }}
           >
             {activeTab === 'swap' && <SwapCard signer={signer} />}
-            {activeTab === 'liquidity' && <LiquidityCard signer={signer} />}
-            {activeTab === 'pools' &&<Pools signer={signer} />
-}
+            {activeTab === 'liquidity' && (
+              <LiquidityCard
+                signer={signer}
+                initialToken0={liquidityDefaults.token0}
+                initialToken1={liquidityDefaults.token1}
+                initialFeeTier={liquidityDefaults.feeTier}
+                initialPoolAddress={liquidityDefaults.poolAddress}
+              />
+            )}
+            {activeTab === 'pools' && (
+              <Pools
+                signer={signer}
+                onSelectPool={({ token0, token1, feeTier, poolAddress }) => {
+                  const normalizeToken = (token: Token): Token => ({
+                    ...token,
+                    decimals: Number(token.decimals ?? 18),
+                    chainId: token.chainId ?? chainId,
+                  });
+
+                  setLiquidityDefaults({
+                    token0: token0 ? normalizeToken(token0) : null,
+                    token1: token1 ? normalizeToken(token1) : null,
+                    feeTier: Number(feeTier),
+                    poolAddress: poolAddress ?? null,
+                  });
+                  setActiveTab('liquidity');
+                }}
+              />
+            )}
 
             
-            {activeTab === 'history' && (
-              <div className="text-center py-20 text-muted-foreground">
-                <History className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <h2 className="text-xl font-semibold mb-2">Transaction History</h2>
-                <p>Your swap and liquidity history will appear here</p>
-              </div>
-            )}
+        
           </motion.div>
         </AnimatePresence>
       </main>

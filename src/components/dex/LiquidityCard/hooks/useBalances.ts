@@ -36,22 +36,23 @@ export const useBalances = ({
 
   const fetchBalancesAndAllowances = useCallback(
     async (): Promise<BalancesState | null> => {
+      
       if (!signer || !address || !token0 || !token1) return null;
 
       try {
         const [balanceA, balanceB, allowanceA, allowanceB] = await Promise.all([
-          getBalanceA(address, token0.address, token0.symbol),
-          getBalanceB(address, token1.address, token1.symbol),
+          getBalanceA(address, token0.address? token0.address :token0?.id, token0.symbol),
+          getBalanceB(address, token1.address? token1.address :token1?.id, token1.symbol),
           getAllowanceA(
             address,
             positionManagerAddress!,
-            token0.address,
+            token0.address? token0.address :token0?.id,
             token0.symbol
           ),
           getAllowanceB(
             address,
             positionManagerAddress!,
-            token1.address,
+            token1.address? token1.address :token1?.id,
             token1.symbol
           ),
         ]);

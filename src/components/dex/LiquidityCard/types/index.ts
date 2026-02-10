@@ -13,6 +13,10 @@ export interface LiquidityState {
 
 export interface LiquidityCardProps {
   signer: JsonRpcSigner | null;
+  initialToken0?: Token | null;
+  initialToken1?: Token | null;
+  initialFeeTier?: number | null;
+  initialPoolAddress?: string | null;
 }
 
 export interface NotificationState {

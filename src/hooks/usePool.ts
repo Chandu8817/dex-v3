@@ -69,6 +69,7 @@ export function usePool(signer: JsonRpcSigner | null) {
   };
 
   const getSlot0 = async (poolAddress: string) => {
+    
     if (!signer || !poolAddress) return null;
     try {
       const poolContract = new ethers.Contract(poolAddress, POOL_ABI, signer);

@@ -9,6 +9,7 @@ export const useERC20 = (signer: JsonRpcSigner | null) => {
   const [error, setError] = useState<string | null>(null);
 
   const getBalance = async (address: string, contractAddress: string, symbol: string) => {
+    
     if (signer) {
       if (symbol === 'ETH') {
         try {
@@ -16,6 +17,7 @@ export const useERC20 = (signer: JsonRpcSigner | null) => {
           setError(null);
 
           const balance = await signer.provider.getBalance(address);
+          
           return balance;
         } catch (err: any) {
           console.error('Error getting balance:', err);

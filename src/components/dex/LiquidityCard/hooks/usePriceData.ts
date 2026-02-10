@@ -44,7 +44,7 @@ export const usePriceData = ({
 
   const fetchPool = useCallback(
     async (tokenA: Token, tokenB: Token, fee: number): Promise<string | null> => {
-      if (!signer || !isInitialized) return null;
+      if (!signer) return null;
       if (!tokenA || !tokenB) return null;
       try {
         
@@ -224,6 +224,8 @@ export const usePriceData = ({
     },
     [token0, token1, signer, getCurrentPrice, getSlot0, getTickSpacing]
   );
+
+  getSlot0 
 
   return {
     fetchPool,

@@ -54,3 +54,20 @@ export type ExactOutputParams = {
   amountOut: bigint;
   amountInMaximum: bigint;
 };
+
+export interface Position {
+  id: string;
+  tokenId: string;
+  token0: any;
+  token1: any;
+  fee: number;
+  liquidity: string;
+  tickLower: number;
+  tickUpper: number;
+  inRange: boolean;
+  uncollectedFees0: string;
+  uncollectedFees1: string;
+  currentPrice: number;
+  minPrice: number;
+  maxPrice: number;
+}
